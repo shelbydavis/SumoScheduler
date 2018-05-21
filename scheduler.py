@@ -1,15 +1,36 @@
 import argparse
 import random
+from collections import deque
 
+class Match(object) :
+    def __init__(self, table, round_num, team_1, team_2) :
+        self.table = table
+        self.round_num = round_num
+        self.team_1 = team_1
+        self.team_2 = team_2
+
+    def __str__(self) :
+        return "Round %s table %s \"%s\" vs. \"%s\"" % (self.round_num, self.table, self.team_1.name, self.team_2.name)
+    
 class Team(object):
-    def __init__(self, name, cooldown=0, matches=0) :
+    def __init__(self, name) :
         self.name = name
-        self.cooldown = cooldown
-        self.matches = matches
+        self.matches = []
 
-    def __str__(self):
-        return "Team: %s Cooldown %s Matches %s" % (self.name, self.cooldown, self.matches)
-
+    def last_match(self) :
+        round_num = None
+        for m in self.matches :
+            if round_num == None or m.round_num > round_num :
+                round_num = m.round_num
+        return round_num
+       
+    def played_team(self, team) :
+        played = False
+        for m in self.matches :
+            if team == m.team_1 or team == m.team_2 :
+                played = True
+        return played
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--cooldown", "-c", default=2, type=int)
@@ -18,52 +39,66 @@ if __name__ == "__main__":
     parser.add_argument("--teams")
     args = parser.parse_args()
 
-    # Read in our list of teams
-    teams = []
-    with open(args.teams,'r') as team_file:
-        for line in team_file:
-            team_name = line.strip()
-            t = Team(team_name, 0, 0)
-            teams.append(t)
+    while True :
+        # Read in our list of teams
+        teams = []
+        with open(args.teams,'r') as team_file:
+            for line in team_file:
+                team_name = line.strip()
+                t = Team(team_name)
+                teams.append(t)
 
-    # Generate all possible pairings
-    all_pairs = [(t0,t1) for (i,t0) in enumerate(teams) for t1 in teams[i+1:]]
-    random.shuffle(all_pairs)
+        # Generate all possible pairings
+        all_pairs = [(t0,t1) for (i,t0) in enumerate(teams) for t1 in teams[i+1:]]
+        played_pairs = []
+        delayed_pairs = deque()
+        random.shuffle(all_pairs)
 
-    match_round = 0
-    matches = []
-    # Generate matches
-    while len([t for t in teams if t.matches != args.matches]) > 1 :
-        valid_matches = []
-        # Choose some matches from teams that haven't competed recently
+        match_round = 0
+        table = 0
+        matches = []
+        # Generate matches
         for (t0,t1) in all_pairs :
-            if t0.matches != args.matches and t1.matches != args.matches and t0.cooldown == 0 and t1.cooldown == 0 :
-                if [(m0,m1) for (m0,m1) in valid_matches if m0 == t0 or m0 == t1 or m1 == t0 or m1 == t1] == []:
-                    valid_matches.append((t0,t1))
-            if len(valid_matches) == args.tables :
-                break
-           
-        # Remove the chosen pairings from the available matches
-        for m in valid_matches :
-            all_pairs.remove(m)
+            # Teams haven't played all their matches
+            if len(t0.matches) < args.matches and  len(t1.matches) < args.matches:
+                # both teams have had enough time to rest 
+                if (t0.last_match() == None or match_round - t0.last_match() >= args.cooldown) and \
+                   (t1.last_match() == None or match_round - t1.last_match() >= args.cooldown) :
+                    matches.append(Match(table, match_round, t0, t1))
+                    t0.matches.append(matches[-1])
+                    t1.matches.append(matches[-1])
+                    played_pairs.append((t0,t1))
+                    table = table + 1
+                    if table >= args.tables :
+                        table = 0
+                        match_round = match_round + 1
+                else :
+                    delayed_pairs.append((t0,t1))
 
-        #update the cooldown counters
-        for t in teams :
-            if t.cooldown > 0 :
-                t.cooldown = t.cooldown - 1
-               
-        #update the match and cooldown counters for these pairings
-        match_teams = [t0 for (t0,t1) in valid_matches] + [t1 for (t0,t1) in valid_matches]
-        for t in match_teams :
-            t.cooldown = args.cooldown
-            t.matches = t.matches + 1
+        # Clean up pass
+        tick = 0
+        while len([t for t in teams if len(t.matches) < args.matches]) > 1 and len(delayed_pairs) > tick:
+            (t0,t1) = delayed_pairs.popleft()
+            # Teams haven't played all their matches
+            if len(t0.matches) < args.matches and  len(t1.matches) < args.matches:
+                # both teams have had enough time to rest 
+                if (t0.last_match() == None or match_round - t0.last_match() >= args.cooldown) and \
+                   (t1.last_match() == None or match_round - t1.last_match() >= args.cooldown) :
+                    matches.append(Match(table, match_round, t0, t1))
+                    t0.matches.append(matches[-1])
+                    t1.matches.append(matches[-1])
+                    played_pairs.append((t0,t1))
+                    table = table + 1
+                    if table >= args.tables :
+                        table = 0
+                        match_round = match_round + 1
+                    tick = 0
+                else :
+                    delayed_pairs.append((t0,t1))
+                    tick = tick + 1
 
-        print "Round %s" % (match_round + 1)
-        match_round = match_round + 1
-        for (i,(t0,t1)) in enumerate(valid_matches) :
-            print "\tTable %s: %s vs. %s" % ((i+1), t0.name, t1.name)
-        matches.append(valid_matches)
-
-    for t in teams:
-        if t.matches != args.matches :
-            print "Team %s only played %s times!" % (t.name, t.matches)
+        if len([t for t in teams if len(t.matches) < args.matches]) == 0 :
+            break
+    
+    for m in matches :
+        print m
